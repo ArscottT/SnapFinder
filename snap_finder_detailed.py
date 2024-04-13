@@ -5,7 +5,7 @@ import logging
 import requests
 import textwrap
 import datetime, pytz
-import json
+import pickle
 from pathlib import Path
 
 from telegram import Update
@@ -34,20 +34,23 @@ logger = logging.getLogger(__name__)
 
 #*** Basic functions ***
 def get_dict():
-    with open('user_address_file.json', "r") as json_file:
-        user_addresses = json.load(json_file)
+    with open('user_address_file.pkl', "rb") as pickle_file:
+        global user_addresses
+        user_addresses = pickle.load(pickle_file)
 
-    for key in user_addresses.copy():
-        user_addresses[int(key)] = user_addresses.pop(key)
-    
-    logger.info("Dict updated")
+    #for key in user_addresses.copy():
+    #    user_addresses[int(key)] = user_addresses.pop(key)
+    #
+    logger.info("Dict loaded")
     logger.info(user_addresses)
 
 def save_dict():
-    with open("user_address_file.json", "w") as json_file: 
-        json.dump(user_addresses, json_file)
+    with open("user_address_file.pkl", "wb") as pickle_file: 
+        pickle.dump(user_addresses, pickle_file)
+        pickle_file.close()
 
     logger.info("Dict saved")
+    logger.info(user_addresses)
 
 def get_latest_open_proposals(space_name):
     try:
@@ -102,10 +105,10 @@ async def update_snaps(context: ContextTypes.DEFAULT_TYPE):
                 end_date = datetime.datetime.fromtimestamp(end_stamp)
 
                 text += textwrap.dedent(f"""
-                                         
-                ID: {proposal["id"]}
+                
                 Name: {proposal["title"]}
-                End date: {end_date}""")
+                End date: {end_date}
+                Link: https://snapshot.org/#/{name}/proposal/{proposal["id"]}""")
         else:
             text = f"No proposals in: {name}"
 
@@ -125,9 +128,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"New user registered {user_addresses}")
 
         await update.message.reply_text(textwrap.dedent(f"""
-                                                        Welcome!             
-                                                        Please send a .eth address to save.
-                                                        To add additional address use the /reg command"""))
+        Welcome!             
+        Please send a .eth address to save.
+        To add additional address use the /reg command"""))
 
         return ENTERING_ADDRESS
         
@@ -189,6 +192,8 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #*** Non command handlers***
 async def address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """address message."""
+    global user_addresses
+
     chat_id = update.effective_message.chat_id
 
     new_address = update.message.text  # Assuming the address is sent as a text message
@@ -197,6 +202,7 @@ async def address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Append the new address to the list for this chat_id
     user_addresses[chat_id].append(new_address)
 
+    logger.info(user_addresses)
     save_dict()
 
     await context.bot.send_message(chat_id=chat_id, text=f"Address '{new_address}' added to your list.")
@@ -215,7 +221,7 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     #*** Init variables ***
-    user_address_file = Path("user_address_file.json")
+    user_address_file = Path("user_address_file.pkl")
     if user_address_file.is_file():
         get_dict()
 
