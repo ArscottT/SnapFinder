@@ -7,10 +7,10 @@ import textwrap
 import datetime, pytz
 import pickle
 from pathlib import Path
+from typing import Dict, List
 
 from telegram import Update
 from telegram.ext import Application, ConversationHandler, CommandHandler, ContextTypes, MessageHandler, filters
-from typing import Dict, List
 
 from keys import *
 
@@ -22,6 +22,7 @@ user_addresses: Dict[int, List[str]] = {}
 
 #conv states
 ENTERING_ADDRESS = 0
+DELETING_ADDRESS = 1
 
 # Enable logging
 logging.basicConfig(
@@ -34,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 #*** Basic functions ***
 def get_dict():
+    """
+    Retrieves the contents of the user_address_file.pkl 
+    and places it into the user_addresses (:obj:`dict`)
+    """
     with open('user_address_file.pkl', "rb") as pickle_file:
         global user_addresses
         user_addresses = pickle.load(pickle_file)
@@ -45,6 +50,9 @@ def get_dict():
     logger.info(user_addresses)
 
 def save_dict():
+    """
+    Saves the contents of user_addresses to the user_address_file.pkl
+    """
     with open("user_address_file.pkl", "wb") as pickle_file: 
         pickle.dump(user_addresses, pickle_file)
         pickle_file.close()
@@ -53,6 +61,9 @@ def save_dict():
     logger.info(user_addresses)
 
 def get_latest_open_proposals(space_name):
+    """
+    Retrieves the latest proposals from Snapshot from the addresses provided
+    """
     try:
         # Snapshot API endpoint to retrieve proposals by space
         snapshot_api_url = "https://hub.snapshot.org/graphql"
@@ -119,6 +130,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
     chat_id = update.effective_message.chat_id
 
+    #await context.bot.setChatMenuButton(chat_id=chat_id, menu_button=context.)
+    #await update.effective_chat.set_menu_button(menu_button=MenuButtonCommands)
+
     if chat_id in user_addresses:
         await update.message.reply_text("You already have addresses registered")
         return ConversationHandler.END
@@ -132,8 +146,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Please send a .eth address to save.
         To add additional address use the /reg command"""))
 
-        return ENTERING_ADDRESS
-        
+        return ENTERING_ADDRESS        
 
 async def run(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /run is issued."""
@@ -144,7 +157,13 @@ async def run(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
-    await update.message.reply_text("Functions")
+    await update.message.reply_text(textwrap.dedent(f"""
+                                    If this is your first time using the bot, issue the /start command to start the bot.
+                                                    
+                                    To enter a new address issue the /reg command.
+                                    To run the bot use /run, to run it daily at 9am UTC use /rund
+                                    
+                                    The /list command lists all current saved addresses"""))
 
 async def reg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /reg is issued."""
@@ -169,12 +188,45 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text="No addresses in your list")
 
 async def run_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /rund is issued."""
     chat_id = update.effective_message.chat_id
     
-    context.job_queue.run_daily(update_snaps, datetime.time(hour=9, minute=00, tzinfo=pytz.timezone('UTC')), chat_id= chat_id, name= str(chat_id))
+    if chat_id in user_addresses and user_addresses[chat_id]:
+        await context.bot.send_message(chat_id=chat_id, text="Daily updates set for 9am UTC")
+        context.job_queue.run_daily(update_snaps, datetime.time(hour=9, minute=00, tzinfo=pytz.timezone('UTC')), chat_id= chat_id, name= str(chat_id))
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="No addresses in your list")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /stop is issued."""
+    chat_id = update.effective_message.chat_id
+    
+    if chat_id in user_addresses and user_addresses[chat_id]:
+
+        current_jobs = context.job_queue.get_jobs_by_name(chat_id)
+        if current_jobs:
+            for job in current_jobs:
+                job.schedule_removal()
+
+        await context.bot.send_message(chat_id=chat_id, text="Your daily update has been stoped")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="You are not registered")
+
+async def rem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /rem is issued."""
+    chat_id = update.effective_message.chat_id
+
+    if chat_id in user_addresses and user_addresses[chat_id]:
+        await update.message.reply_text("Send .eth to watch")
+
+        return DELETING_ADDRESS
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="You are not registered")
+
+        return ConversationHandler.END
+
+async def del_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /del is issued."""
     chat_id = update.effective_message.chat_id
     
     if chat_id in user_addresses and user_addresses[chat_id]:
@@ -190,8 +242,8 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text="You are not registered")
 
 #*** Non command handlers***
-async def address(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """address message."""
+async def add_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """add address"""
     global user_addresses
 
     chat_id = update.effective_message.chat_id
@@ -209,7 +261,29 @@ async def address(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
+async def rem_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """remove address"""
+    global user_addresses
+
+    chat_id = update.effective_message.chat_id
+
+    old_address = update.message.text  # Assuming the address is sent as a text message
+    #***TODO ADD ADDRESS SANITATION***
+
+    # Append the new address to the list for this chat_id
+    user_addresses[chat_id].remove(old_address)
+
+    logger.info(user_addresses)
+    save_dict()
+
+    await context.bot.send_message(chat_id=chat_id, text=f"Address '{old_address}' removed from your list")
+
+    return ConversationHandler.END
+
 async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Fallback function for when the address registration fails
+    """
     update.message.reply_text("Registration cancelled")
     
     return ConversationHandler.END
@@ -217,6 +291,16 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """unknown message."""
     await update.message.reply_text("Unknown message")
+
+async def post_init(application: Application):
+    """
+    Called after the bot is initialised.
+    Sets specific parameters that can only be set once the bot exists
+    """
+    await application.bot.set_my_commands([('start', 'Starts the bot'), ('reg', 'Register a new address'),
+                                           ('list', 'List current saved addresses'), ('run', 'Run the bot once'), ('rund', 'Start daily updates'),
+                                           ('rem', 'Remove given address'),
+                                           ('stop', 'Stop daily updates'), ('del', 'Delete current chat from the bot')])
 
 
 def main():
@@ -227,13 +311,13 @@ def main():
 
     #*** Start the bot ***
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
 
     #Conversation paths
     conv_handler_start = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            ENTERING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, address)],
+            ENTERING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_address)],
         },
         fallbacks=[CommandHandler('cancel', cancel_registration)],
         conversation_timeout=60
@@ -242,7 +326,16 @@ def main():
     conv_handler_reg = ConversationHandler(
         entry_points=[CommandHandler('reg', reg_command)],
         states={
-            ENTERING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, address)],
+            ENTERING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_address)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel_registration)],
+        conversation_timeout=60
+    )
+
+    conv_handler_rem = ConversationHandler(
+        entry_points=[CommandHandler('rem', rem_command)],
+        states={
+            DELETING_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, rem_address)],
         },
         fallbacks=[CommandHandler('cancel', cancel_registration)],
         conversation_timeout=60
@@ -250,12 +343,14 @@ def main():
 
     application.add_handler(conv_handler_start)
     application.add_handler(conv_handler_reg)
+    application.add_handler(conv_handler_rem)
 
     # on different commands - answer in Telegram
     application.add_handler(CommandHandler("run", run))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("list", list_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("del", stop_command))
     application.add_handler(CommandHandler("rund", run_daily_command))
 
     # on non command i.e message - unknown message on Telegram
